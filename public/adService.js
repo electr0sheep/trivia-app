@@ -92,7 +92,7 @@
 		skipAllCashBtn.textContent = 'Skip all ads — $20';
 		skipAllCashBtn.addEventListener('click', () => {
 			setSkipAll(true);
-			hideOverlay();
+			hideOverlay(true);
 		});
 		// Points button
 		skipAllPointsBtn = document.createElement('button');
@@ -101,7 +101,7 @@
 		skipAllPointsBtn.textContent = 'Skip all ads — 2000 Breeze Points';
 		skipAllPointsBtn.addEventListener('click', () => {
 			setSkipAll(true);
-			hideOverlay();
+			hideOverlay(true);
 		});
 		actionsEl.appendChild(skipAllCashBtn);
 		actionsEl.appendChild(skipAllPointsBtn);
@@ -113,7 +113,7 @@
 		skipBtnEl.disabled = true;
 		skipBtnEl.addEventListener('click', () => {
 			if (!allowClose) return;
-			hideOverlay();
+			hideOverlay(true);
 		});
 
 		cardEl.appendChild(mediaEl);
@@ -147,7 +147,7 @@
 			hideOverlay();
 		}, HOUSE_MIN_MS);
 	}
-	function hideOverlay() {
+	function hideOverlay(userSkipped = false) {
 		if (showTimer) {
 			clearTimeout(showTimer);
 			showTimer = null;
@@ -155,6 +155,10 @@
 		if (!overlayEl) return;
 		overlayEl.classList.add('hidden');
 		showing = false;
+		if (userSkipped) {
+			// Let the game know the user actively skipped an ad
+			window.dispatchEvent(new CustomEvent('adSkipped'));
+		}
 	}
 
 	window.AdService = {

@@ -34,6 +34,15 @@
 	let autoJoinAttempted = false;
 	let answerLocked = false;
 	let choiceOrder = [];
+	let aiHelpBtn = null;
+	let aiModalBackdrop = null;
+	let aiModalCard = null;
+	let aiModalBody = null;
+	let aiModalStatus = null;
+	let aiHelpAvailable = true;
+	let aiAbortController = null;
+
+	const AI_HELP_ENDPOINT = '/api/ai-help';
 
 	function showJoinScreen() {
 		screenJoin.classList.remove('hidden');
@@ -53,6 +62,126 @@
 		const s = String(totalSeconds % 60).padStart(2, '0');
 		const m = String(Math.floor(totalSeconds / 60)).padStart(2, '0');
 		return `${m}:${s}`;
+	}
+
+	function injectAiStyles() {
+		if (document.getElementById('ai-help-styles')) return;
+		const style = document.createElement('style');
+		style.id = 'ai-help-styles';
+		style.textContent = `
+			.ai-help-btn { margin-top: 12px; padding: 10px 12px; background: #0ea5e9; color: #f8fafc; border: none; border-radius: 8px; cursor: pointer; font-weight: 600; }
+			.ai-help-btn:disabled { opacity: 0.6; cursor: not-allowed; }
+			.ai-help-modal-backdrop { position: fixed; inset: 0; background: rgba(0,0,0,0.55); display: flex; align-items: center; justify-content: center; z-index: 9999; }
+			.ai-help-modal-backdrop.hidden { display: none !important; }
+			.ai-help-modal-card { background: #0b172a; color: #e2e8f0; max-width: 720px; width: 92%; border-radius: 12px; padding: 16px 18px; box-shadow: 0 20px 60px rgba(0,0,0,0.35); }
+			.ai-help-modal-card h3 { margin: 0 0 8px 0; color: #38bdf8; }
+			.ai-help-modal-body { margin-top: 8px; max-height: 360px; overflow: auto; white-space: pre-wrap; line-height: 1.5; }
+			.ai-help-close { float: right; cursor: pointer; color: #94a3b8; }
+			.ai-help-status { font-size: 13px; margin-bottom: 4px; color: #38bdf8; }
+		`;
+		document.head.appendChild(style);
+	}
+
+	function ensureAiHelpUi() {
+		if (aiHelpBtn) return;
+		injectAiStyles();
+		aiHelpBtn = document.createElement('button');
+		aiHelpBtn.type = 'button';
+		aiHelpBtn.className = 'ai-help-btn';
+		aiHelpBtn.textContent = 'Get AI help';
+
+		aiModalBackdrop = document.createElement('div');
+		aiModalBackdrop.className = 'ai-help-modal-backdrop hidden';
+
+		aiModalCard = document.createElement('div');
+		aiModalCard.className = 'ai-help-modal-card';
+
+		const closeBtn = document.createElement('span');
+		closeBtn.textContent = '✕';
+		closeBtn.className = 'ai-help-close';
+		closeBtn.addEventListener('click', () => {
+			aiModalBackdrop.classList.add('hidden');
+			if (aiAbortController) aiAbortController.abort();
+		});
+
+		const title = document.createElement('h3');
+		title.textContent = 'AI help';
+
+		aiModalStatus = document.createElement('div');
+		aiModalStatus.className = 'ai-help-status';
+		aiModalStatus.textContent = 'Ready to ask about this question.';
+
+		aiModalBody = document.createElement('div');
+		aiModalBody.className = 'ai-help-modal-body';
+		aiModalBody.textContent = '';
+
+		aiModalCard.appendChild(closeBtn);
+		aiModalCard.appendChild(title);
+		aiModalCard.appendChild(aiModalStatus);
+		aiModalCard.appendChild(aiModalBody);
+
+		aiModalBackdrop.appendChild(aiModalCard);
+		document.body.appendChild(aiModalBackdrop);
+
+		aiHelpBtn.addEventListener('click', async () => {
+			if (!currentQuestion) return;
+			aiHelpBtn.disabled = true;
+			aiModalStatus.textContent = 'Contacting AI helper...';
+			aiModalStatus.style.color = '#38bdf8';
+			aiModalBody.textContent = '';
+			aiModalBackdrop.classList.remove('hidden');
+			try {
+				const answer = await fetchAiHelp(currentQuestion);
+				aiModalStatus.textContent = 'AI response ready';
+				aiModalStatus.style.color = '#34d399';
+				aiModalBody.textContent = answer;
+			} catch (err) {
+				aiModalStatus.textContent = 'Unable to reach AI helper.';
+				aiModalStatus.style.color = '#f97316';
+				aiModalBody.textContent = err && err.message ? err.message : 'Unknown error';
+			} finally {
+				aiHelpBtn.disabled = false;
+			}
+		});
+	}
+
+	function buildAiPrompt(question) {
+		if (!question) return 'No question provided.';
+		let prompt = `Here is a trivia question. Reply with the single most likely correct answer and a one-sentence explanation.\n\nQuestion: ${question.text}\nChoices:\n`;
+		if (Array.isArray(question.choices)) {
+			question.choices.forEach((c, idx) => {
+				prompt += `- (${idx + 1}) ${c}\n`;
+			});
+		}
+		return prompt;
+	}
+
+	async function fetchAiHelp(question) {
+		if (aiAbortController) aiAbortController.abort();
+		aiAbortController = new AbortController();
+		try {
+			const res = await fetch(AI_HELP_ENDPOINT, {
+				method: 'POST',
+				headers: {
+					'Content-Type': 'application/json'
+				},
+				body: JSON.stringify({
+					question: {
+						text: question.text,
+						choices: question.choices || []
+					}
+				}),
+				signal: aiAbortController.signal
+			});
+			if (!res.ok) {
+				throw new Error('AI request failed. Try again soon.');
+			}
+			const data = await res.json();
+			if (data && data.answer) return data.answer;
+			return 'No answer returned.';
+		} finally {
+			aiAbortController = null;
+		}
 	}
 
 	function startTick(toEndsAt) {
@@ -145,6 +274,14 @@
 			});
 			choicesEl.appendChild(btn);
 		});
+		ensureAiHelpUi();
+		if (questionBox && aiHelpBtn && aiHelpBtn.parentElement !== questionBox) {
+			questionBox.appendChild(aiHelpBtn);
+		}
+		if (aiHelpBtn) {
+			aiHelpBtn.classList.remove('hidden');
+			aiHelpBtn.disabled = false;
+		}
 	}
 
 	function showReveal(q) {
@@ -361,4 +498,6 @@
 	} else {
 		showJoinScreen();
 	}
+
+	// AI help always available; no dependency on ad skip
 })();

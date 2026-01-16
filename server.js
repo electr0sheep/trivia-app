@@ -8,6 +8,9 @@ const { questions } = require('./src/questions');
 const { toWordsOrdinal } = require('number-to-words');
 
 const PORT = process.env.PORT || 3000;
+const GEMINI_API_KEY = 'PutYourKeyHere';
+const GEMINI_MODEL = process.env.GEMINI_MODEL || 'gemini-3-flash-preview';
+const GEMINI_ENDPOINT = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent`;
 const QUESTION_DURATION_MS = 10000; // 10s to answer
 const REVEAL_DURATION_MS = 3000; // 3s reveal before next question
 const IDLE_BETWEEN_MS = 1500; // short breather
@@ -21,6 +24,7 @@ const io = new Server(server, {
 	}
 });
 
+app.use(express.json({ limit: '1mb' }));
 app.use(express.static(path.join(__dirname, 'public')));
 
 /**
@@ -125,6 +129,73 @@ function buildShuffledOrder() {
 	shuffledOrder = fisherYatesShuffle(order);
 	shuffledCursor = -1;
 }
+
+/**
+ * AI helper proxy to avoid browser CORS issues.
+ * Expects body: { question: { text: string, choices: string[] } }
+ */
+function buildAiPrompt(question) {
+	if (!question) return 'No question provided.';
+	let prompt = `Here is a trivia question. Reply with the single most likely correct answer and a one-sentence explanation.\n\nQuestion: ${question.text}\nChoices:\n`;
+	if (Array.isArray(question.choices)) {
+		question.choices.forEach((c, idx) => {
+			prompt += `- (${idx + 1}) ${c}\n`;
+		});
+	}
+	return prompt;
+}
+
+app.post('/api/ai-help', async (req, res) => {
+	try {
+		if (!GEMINI_API_KEY) {
+			return res.status(500).json({ error: 'Gemini API key missing. Set GEMINI_API_KEY env var.' });
+		}
+		const { question } = req.body || {};
+		if (!question || !question.text) {
+			return res.status(400).json({ error: 'Missing question text' });
+		}
+		const payload = {
+			contents: [
+				{
+					role: 'user',
+					parts: [
+						{ text: 'You are a concise trivia coach. Provide the single most likely correct choice and a one-sentence reasoning. If unsure, give your best guess.' }
+					]
+				},
+				{
+					role: 'user',
+					parts: [{ text: buildAiPrompt(question) }]
+				}
+			],
+			generationConfig: {
+				temperature: 0.2,
+				maxOutputTokens: 200
+			}
+		};
+		const upstream = await fetch(`${GEMINI_ENDPOINT}?key=${encodeURIComponent(GEMINI_API_KEY)}`, {
+			method: 'POST',
+			headers: { 'Content-Type': 'application/json' },
+			body: JSON.stringify(payload)
+		});
+		if (!upstream.ok) {
+			const text = await upstream.text();
+			return res.status(502).json({ error: 'Upstream AI request failed', details: text.slice(0, 200) });
+		}
+		const data = await upstream.json();
+		const answer = data &&
+			data.candidates &&
+			data.candidates[0] &&
+			data.candidates[0].content &&
+			data.candidates[0].content.parts &&
+			data.candidates[0].content.parts[0] &&
+			data.candidates[0].content.parts[0].text
+			? data.candidates[0].content.parts[0].text.trim()
+			: null;
+		return res.json({ answer });
+	} catch (err) {
+		return res.status(500).json({ error: 'AI helper unavailable', details: err.message });
+	}
+});
 
 function startNextQuestion() {
 	if (questions.length === 0) {
